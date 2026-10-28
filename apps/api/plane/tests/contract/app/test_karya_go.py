@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -101,6 +102,25 @@ class TestContext:
         response = _client(guest).get(CONTEXT_URL.format(slug=workspace.slug))
 
         assert response.data["projects"] == []
+
+    @pytest.mark.django_db
+    def test_removed_member_loses_the_project(self, workspace, project, mayank):
+        membership = ProjectMember.objects.get(project=project, member=mayank)
+        membership.is_active = False
+        membership.save()
+        assert _client(mayank).get(CONTEXT_URL.format(slug=workspace.slug)).data["projects"] == []
+
+        membership.is_active = True
+        membership.deleted_at = timezone.now()
+        membership.save()
+        assert _client(mayank).get(CONTEXT_URL.format(slug=workspace.slug)).data["projects"] == []
+
+    @pytest.mark.django_db
+    def test_removed_workspace_member_is_refused(self, workspace, project, mayank):
+        WorkspaceMember.objects.filter(workspace=workspace, member=mayank).update(is_active=False)
+
+        for url in (CONTEXT_URL, MINE_URL):
+            assert _client(mayank).get(url.format(slug=workspace.slug)).status_code == 403
 
     @pytest.mark.django_db
     def test_outsider_is_refused(self, workspace, project):
@@ -217,7 +237,7 @@ class TestDraft:
 @pytest.mark.contract
 class TestMine:
     @pytest.mark.django_db
-    def test_lists_my_open_items_only(self, workspace, project, mayank, create_user):
+    def test_lists_my_open_items_only(self, workspace, project, other_project, mayank, create_user):
         todo = State.objects.create(name="Todo", group="unstarted", project=project, workspace=workspace)
         done = State.objects.create(name="Done", group="completed", project=project, workspace=workspace)
         mine = Issue.objects.create(name="Mine", project=project, workspace=workspace, state=todo)
@@ -225,6 +245,12 @@ class TestMine:
         Issue.objects.create(name="Not mine", project=project, workspace=workspace, state=todo)
         for issue in (mine, finished):
             IssueAssignee.objects.create(issue=issue, assignee=mayank, project=project, workspace=workspace)
+        # Assigned in a project Mayank is not a member of: must not leak.
+        hidden_state = State.objects.create(name="Todo", group="unstarted", project=other_project, workspace=workspace)
+        hidden = Issue.objects.create(
+            name="Other project", project=other_project, workspace=workspace, state=hidden_state
+        )
+        IssueAssignee.objects.create(issue=hidden, assignee=mayank, project=other_project, workspace=workspace)
 
         response = _client(mayank).get(MINE_URL.format(slug=workspace.slug))
 

@@ -63,13 +63,16 @@ def _projects(slug, user):
         archived_at__isnull=True,
         project_projectmember__member=user,
         project_projectmember__is_active=True,
+        project_projectmember__deleted_at__isnull=True,  # joins skip the soft-delete manager
         project_projectmember__role__gte=ROLE.MEMBER.value,
     ).distinct()
 
 
 def _members(project_id):
     rows = (
-        ProjectMember.objects.filter(project_id=project_id, is_active=True, member__is_bot=False)
+        ProjectMember.objects.filter(
+            project_id=project_id, is_active=True, member__is_bot=False, member__is_active=True
+        )
         .select_related("member", "member__avatar_asset")
         .order_by("member__display_name")
     )
@@ -171,6 +174,7 @@ class KaryaGoMineEndpoint(BaseAPIView):
                 workspace__slug=slug,
                 project__project_projectmember__member=request.user,
                 project__project_projectmember__is_active=True,
+                project__project_projectmember__deleted_at__isnull=True,
                 project__archived_at__isnull=True,
                 issue_assignee__assignee=request.user,
                 issue_assignee__deleted_at__isnull=True,
