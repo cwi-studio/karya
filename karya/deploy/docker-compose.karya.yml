@@ -12,6 +12,14 @@ services:
     image: karya-live:${KARYA_RELEASE:-1.4.2-k1}
   api:
     image: karya-backend:${KARYA_RELEASE:-1.4.2-k1}
+    # Karya Go (/go/): speech-to-text and the model that drafts tickets. Empty = voice off / sentence becomes the title.
+    environment:
+      KARYA_GO_STT_KEY: ${KARYA_GO_STT_KEY:-}
+      KARYA_GO_STT_MODEL: ${KARYA_GO_STT_MODEL:-saaras:v3}
+      KARYA_GO_STT_MODE: ${KARYA_GO_STT_MODE:-codemix}
+      KARYA_GO_LLM_URL: ${KARYA_GO_LLM_URL:-https://api.sarvam.ai/v1/chat/completions}
+      KARYA_GO_LLM_KEY: ${KARYA_GO_LLM_KEY:-}
+      KARYA_GO_LLM_MODEL: ${KARYA_GO_LLM_MODEL:-sarvam-105b-conversations}
   worker:
     image: karya-backend:${KARYA_RELEASE:-1.4.2-k1}
   beat-worker:

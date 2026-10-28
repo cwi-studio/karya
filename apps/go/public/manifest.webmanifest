@@ -1,0 +1,77 @@
+{
+  "id": "/go/",
+  "name": "Karya Go",
+  "short_name": "Karya Go",
+  "description": "Speak a ticket into Karya.",
+  "start_url": "/go/",
+  "scope": "/go/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fbf7f4",
+  "theme_color": "#fbf7f4",
+  "categories": [
+    "productivity",
+    "business"
+  ],
+  "icons": [
+    {
+      "src": "/go/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/go/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/go/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/go/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "My work",
+      "url": "/go/?tab=mine",
+      "icons": [
+        {
+          "src": "/go/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ],
+  "share_target": {
+    "action": "/go/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "image/*",
+            "video/*",
+            "application/pdf",
+            ".csv",
+            ".xls",
+            ".xlsx",
+            ".doc",
+            ".docx",
+            ".txt"
+          ]
+        }
+      ]
+    }
+  }
+}

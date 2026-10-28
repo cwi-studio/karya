@@ -1,0 +1,129 @@
+/* Karya Go — Karya coral (#ff7a59) on ink (#1c0f0b). SPDX-License-Identifier: AGPL-3.0-only */
+@import "tailwindcss";
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+@theme {
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-coral: #ff7a59;
+  --color-coral-deep: #e8623f;
+  --color-ink: #1c0f0b;
+}
+
+:root {
+  --bg: #fbf7f4;
+  --surface: #ffffff;
+  --surface-2: #f4ede8;
+  --line: #eadfd8;
+  --text: #1c0f0b;
+  --muted: #7a6a63;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #140b08;
+    --surface: #1f1411;
+    --surface-2: #2a1c18;
+    --line: #3a2a24;
+    --text: #f6eee9;
+    --muted: #a8968e;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+button {
+  cursor: pointer;
+}
+@layer base {
+  input,
+  textarea,
+  select {
+    font-size: 16px; /* no iOS zoom on focus; in base so text-* utilities still win */
+  }
+}
+
+.safe-top {
+  padding-top: max(env(safe-area-inset-top), 12px);
+}
+.safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 10px);
+}
+
+@keyframes go-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes go-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes go-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.08);
+  }
+}
+@keyframes go-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes go-breathe {
+  50% {
+    transform: scale(1.06);
+    opacity: 0.55;
+  }
+}
+.sheet-in {
+  animation: go-sheet-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.fade-in {
+  animation: go-fade-in 180ms ease-out;
+}
+.pop {
+  animation: go-pop 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.breathe {
+  animation: go-breathe 2.4s ease-in-out infinite;
+}
+.shimmer {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--line) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: go-shimmer 1.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet-in,
+  .fade-in,
+  .pop,
+  .breathe,
+  .shimmer {
+    animation: none;
+  }
+}

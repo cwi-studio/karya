@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 100 100" fill="none" role="img" aria-label="Karya">
+  <rect width="100" height="100" rx="22" fill="#1c0f0b"/>
+  <rect x="24" y="38" width="36" height="36" rx="9" stroke="#ff7a59" stroke-width="5" opacity="0.5"/>
+  <path d="M33 56L42 65L67 37" stroke="#ff7a59" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="76" cy="27" r="5" fill="#ff7a59"/>
+</svg>
