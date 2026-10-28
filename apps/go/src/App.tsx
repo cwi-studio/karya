@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "./api";
 import { takeShared } from "./attachments";
 import { Capture } from "./Capture";
+import { InstallBanner } from "./Install";
 import { MyWork } from "./MyWork";
 import { Mark, Row, Sheet, storage } from "./ui";
 
@@ -119,6 +120,7 @@ export function App() {
           Full Karya
         </a>
       </header>
+      <InstallBanner />
 
       <main className="relative min-h-0 flex-1">
         {tab === "new" ? (
