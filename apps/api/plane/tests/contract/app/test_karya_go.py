@@ -16,12 +16,29 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from plane.db.models import Issue, IssueAssignee, Module, Project, ProjectMember, State, User, WorkspaceMember
+from plane.db.models import (
+    FileAsset,
+    Issue,
+    IssueAssignee,
+    IssueComment,
+    IssueLabel,
+    Label,
+    Module,
+    ModuleIssue,
+    Project,
+    ProjectMember,
+    State,
+    User,
+    WorkspaceMember,
+)
+from plane.karya.models import KaryaStateApprover
 from plane.karya import go, go_views
 
 CONTEXT_URL = "/api/workspaces/{slug}/karya/go/context/"
 DRAFT_URL = "/api/workspaces/{slug}/karya/go/draft/"
 MINE_URL = "/api/workspaces/{slug}/karya/go/mine/"
+ITEMS_URL = "/api/workspaces/{slug}/karya/go/items/"
+ITEM_URL = "/api/workspaces/{slug}/karya/go/items/{id}/"
 
 
 def _client(user):
@@ -258,3 +275,180 @@ class TestMine:
         assert [i["name"] for i in response.data] == ["Mine"]
         assert response.data[0]["key"] == f"EDZ-{mine.sequence_id}"
         assert response.data[0]["state"]["group"] == "unstarted"
+
+
+@pytest.fixture
+def states(project, workspace):
+    def make(name, group, sequence):
+        return State.objects.create(name=name, group=group, sequence=sequence, project=project, workspace=workspace)
+
+    return {
+        "todo": make("Todo", "unstarted", 2000),
+        "backlog": make("Backlog", "backlog", 1000),
+        "doing": make("In Progress", "started", 3000),
+        "done": make("Done", "completed", 4000),
+    }
+
+
+def _item(project, state, name, by, assignees=(), priority="none", **extra):
+    issue = Issue.objects.create(
+        name=name, project=project, workspace=project.workspace, state=state, priority=priority, **extra
+    )
+    Issue.objects.filter(pk=issue.pk).update(created_by=by)  # save() takes created_by from the request user
+    for user in assignees:
+        IssueAssignee.objects.create(issue=issue, assignee=user, project=project, workspace=project.workspace)
+    return issue
+
+
+@pytest.mark.contract
+class TestContextStatesAndLabels:
+    @pytest.mark.django_db
+    def test_states_come_in_board_order_with_their_approvers(self, workspace, project, mayank, states, create_user):
+        KaryaStateApprover.objects.create(
+            state=states["done"], approver=create_user, project=project, workspace=workspace
+        )
+        Label.objects.create(name="Bug", color="#f00", project=project, workspace=workspace)
+
+        edz = _client(mayank).get(CONTEXT_URL.format(slug=workspace.slug)).data["projects"][0]
+
+        assert [s["name"] for s in edz["states"]] == ["Backlog", "Todo", "In Progress", "Done"]
+        done = edz["states"][-1]
+        assert done["group"] == "completed" and done["approver_ids"] == [str(create_user.id)]
+        assert edz["labels"][0]["name"] == "Bug"
+
+
+@pytest.mark.contract
+class TestItems:
+    @pytest.mark.django_db
+    def test_member_sees_every_open_item_in_the_project_not_only_their_own(
+        self, workspace, project, mayank, states, create_user
+    ):
+        mine = _item(project, states["todo"], "Mine", create_user, [mayank])
+        theirs = _item(project, states["doing"], "Someone else's", create_user, [create_user])
+        nobody = _item(project, states["backlog"], "Nobody's", create_user)
+        _item(project, states["done"], "Finished", create_user, [mayank])
+
+        data = _client(mayank).get(ITEMS_URL.format(slug=workspace.slug)).data
+
+        assert {i["id"] for i in data["items"]} == {str(mine.id), str(theirs.id), str(nobody.id)}
+        assert data["total"] == 3
+        assert data["counts"] == {str(states["todo"].id): 1, str(states["doing"].id): 1, str(states["backlog"].id): 1}
+        row = next(i for i in data["items"] if i["id"] == str(mine.id))
+        assert row["assignee_ids"] == [str(mayank.id)] and row["state"]["id"] == str(states["todo"].id)
+
+    @pytest.mark.django_db
+    def test_scopes(self, workspace, project, mayank, states, create_user):
+        mine = _item(project, states["todo"], "Mine", create_user, [mayank])
+        made = _item(project, states["todo"], "Made by me", mayank, [create_user])
+        nobody = _item(project, states["todo"], "Nobody's", create_user)
+
+        def get(**q):
+            return {i["name"] for i in _client(mayank).get(ITEMS_URL.format(slug=workspace.slug), q).data["items"]}
+
+        assert get(scope="mine") == {mine.name}
+        assert get(scope="created") == {made.name}
+        assert get(scope="unassigned") == {nobody.name}
+        assert get(assignees="none") == {nobody.name}
+        assert get(assignees=f"{create_user.id},none") == {made.name, nobody.name}
+
+    @pytest.mark.django_db
+    def test_removed_assignee_counts_as_unassigned(self, workspace, project, mayank, states, create_user):
+        item = _item(project, states["todo"], "Was mine", create_user, [mayank])
+        IssueAssignee.objects.filter(issue=item).update(deleted_at=timezone.now())
+
+        data = _client(mayank).get(ITEMS_URL.format(slug=workspace.slug), {"scope": "unassigned"}).data
+
+        assert [i["id"] for i in data["items"]] == [str(item.id)]
+        assert data["items"][0]["assignee_ids"] == []
+
+    @pytest.mark.django_db
+    def test_filters_and_search(self, workspace, project, mayank, states, create_user, module):
+        bug = Label.objects.create(name="Bug", project=project, workspace=workspace)
+        urgent = _item(project, states["todo"], "Receipt logo cut off", create_user, priority="urgent")
+        IssueLabel.objects.create(issue=urgent, label=bug, project=project, workspace=workspace)
+        ModuleIssue.objects.create(issue=urgent, module=module, project=project, workspace=workspace)
+        done = _item(project, states["done"], "Old receipt fix", create_user)
+        _item(project, states["todo"], "Other", create_user, priority="low")
+
+        def get(**q):
+            return [i["name"] for i in _client(mayank).get(ITEMS_URL.format(slug=workspace.slug), q).data["items"]]
+
+        assert get(priorities="urgent,high") == [urgent.name]
+        assert get(labels=str(bug.id)) == [urgent.name]
+        assert get(modules=str(module.id)) == [urgent.name]
+        assert get(q="receipt") == [urgent.name]
+        assert get(q="receipt", groups="completed") == [done.name]
+        assert get(states=str(states["done"].id)) == [done.name]
+        assert get(q=f"edz-{urgent.sequence_id}") == [urgent.name]
+        assert get(sort="priority", groups="unstarted")[0] == urgent.name
+
+    @pytest.mark.django_db
+    def test_pages(self, workspace, project, mayank, states, create_user):
+        for n in range(5):
+            _item(project, states["todo"], f"Item {n}", create_user)
+        url = ITEMS_URL.format(slug=workspace.slug)
+
+        first = _client(mayank).get(url, {"limit": 3}).data
+        second = _client(mayank).get(url, {"limit": 3, "offset": first["next_offset"]}).data
+
+        assert first["total"] == 5 and first["next_offset"] == 3
+        assert second["next_offset"] is None
+        assert len({i["id"] for i in first["items"] + second["items"]}) == 5
+
+    @pytest.mark.django_db
+    def test_projects_i_am_not_a_member_of_stay_hidden(
+        self, workspace, project, other_project, mayank, states, create_user
+    ):
+        hidden_state = State.objects.create(name="Todo", group="unstarted", project=other_project, workspace=workspace)
+        _item(other_project, hidden_state, "HrZen secret", create_user, [mayank])
+        url = ITEMS_URL.format(slug=workspace.slug)
+
+        assert _client(mayank).get(url).data["items"] == []
+        assert _client(mayank).get(url, {"project": str(other_project.id)}).data["items"] == []
+
+    @pytest.mark.django_db
+    def test_guest_sees_nothing(self, workspace, project, states, create_user):
+        guest = _user(workspace, "guest")
+        ProjectMember.objects.create(project=project, member=guest, workspace=workspace, role=5)
+        _item(project, states["todo"], "Anything", create_user, [guest])
+
+        assert _client(guest).get(ITEMS_URL.format(slug=workspace.slug)).data["items"] == []
+
+    @pytest.mark.django_db
+    def test_removed_workspace_member_is_refused(self, workspace, project, mayank, states):
+        WorkspaceMember.objects.filter(workspace=workspace, member=mayank).update(is_active=False)
+
+        assert _client(mayank).get(ITEMS_URL.format(slug=workspace.slug)).status_code == 403
+
+
+@pytest.mark.contract
+class TestItem:
+    @pytest.mark.django_db
+    def test_detail_has_description_comments_and_attachments(self, workspace, project, mayank, states, create_user):
+        item = _item(project, states["todo"], "Logo", create_user, description_html="<p>Cut off</p>")
+        IssueComment.objects.create(
+            issue=item, actor=create_user, comment_html="<p>On it</p>", project=project, workspace=workspace
+        )
+        FileAsset.objects.create(
+            issue=item,
+            entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
+            is_uploaded=True,
+            attributes={"name": "shot.png", "size": 10, "type": "image/png"},
+            asset="x/shot.png",
+            project=project,
+            workspace=workspace,
+        )
+
+        data = _client(mayank).get(ITEM_URL.format(slug=workspace.slug, id=item.id)).data
+
+        assert data["description_html"] == "<p>Cut off</p>"
+        assert [c["html"] for c in data["comments"]] == ["<p>On it</p>"]
+        assert data["attachments"][0]["name"] == "shot.png"
+        assert data["attachments"][0]["url"].endswith(f"/issues/{item.id}/attachments/{data['attachments'][0]['id']}/")
+
+    @pytest.mark.django_db
+    def test_item_in_a_project_i_am_not_in_is_404(self, workspace, other_project, mayank, create_user):
+        state = State.objects.create(name="Todo", group="unstarted", project=other_project, workspace=workspace)
+        item = _item(other_project, state, "Secret", create_user)
+
+        assert _client(mayank).get(ITEM_URL.format(slug=workspace.slug, id=item.id)).status_code == 404

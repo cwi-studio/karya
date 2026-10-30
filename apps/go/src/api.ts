@@ -3,6 +3,16 @@
 
 export type Member = { id: string; display_name: string; full_name: string; avatar_url: string };
 export type Module = { id: string; name: string };
+export type StateGroup = "backlog" | "unstarted" | "started" | "completed" | "cancelled";
+export type State = {
+  id: string;
+  name: string;
+  color: string;
+  group: StateGroup;
+  default: boolean;
+  approver_ids: string[]; // empty = anyone may move work items here
+};
+export type Label = { id: string; name: string; color: string };
 export type Project = {
   id: string;
   name: string;
@@ -10,6 +20,8 @@ export type Project = {
   emoji: string;
   members: Member[];
   modules: Module[];
+  states: State[];
+  labels: Label[];
 };
 export type Workspace = { id: string; slug: string; name: string };
 export type Context = {
@@ -29,16 +41,58 @@ export type Draft = {
   module_id: string | null;
 };
 export type DraftResult = { transcript: string; understood: boolean; draft: Draft };
-export type MyItem = {
+export type Item = {
   id: string;
   name: string;
   key: string;
   project_id: string;
   priority: Priority;
+  start_date: string | null;
   target_date: string | null;
+  created_at: string;
   updated_at: string;
-  state: { name: string; color: string; group: string };
+  created_by: string | null;
+  state: { id: string | null; name: string; color: string; group: StateGroup };
+  assignee_ids: string[];
+  label_ids: string[];
+  module_ids: string[];
 };
+export type Comment = {
+  id: string;
+  html: string;
+  created_at: string;
+  edited: boolean;
+  actor: { id: string; display_name: string; avatar_url: string };
+};
+export type FileLink = { id: string; name: string; size: number; type: string; url: string };
+export type ItemDetail = Item & { description_html: string; comments: Comment[]; attachments: FileLink[] };
+export type ItemsPage = { items: Item[]; total: number; counts: Record<string, number>; next_offset: number | null };
+export type Scope = "all" | "mine" | "created" | "unassigned";
+export type Sort = "updated" | "due" | "priority" | "created";
+export type ItemsQuery = {
+  project?: string; // empty = every project I'm in
+  scope: Scope;
+  groups: StateGroup[];
+  states: string[];
+  priorities: Priority[];
+  assignees: string[]; // user ids, "none" = nobody
+  labels: string[];
+  modules: string[];
+  q: string;
+  sort: Sort;
+  offset?: number;
+  limit?: number;
+};
+/** What a work item edit may send to upstream's PATCH (the same fields the full app sends). */
+export type ItemPatch = Partial<{
+  name: string;
+  state_id: string;
+  priority: Priority;
+  assignee_ids: string[];
+  label_ids: string[];
+  start_date: string | null;
+  target_date: string | null;
+}>;
 export type Created = { id: string; key: string; url: string; projectId: string };
 
 export class SignedOut extends Error {}
@@ -70,7 +124,34 @@ export const signInUrl = () => `/?next_path=${encodeURIComponent("/go/")}`;
 export const me = () => call<{ id: string; display_name: string; email: string }>("GET", "/api/users/me/");
 export const workspaces = () => call<Workspace[]>("GET", "/api/users/me/workspaces/");
 export const context = (slug: string) => call<Context>("GET", `/api/workspaces/${slug}/karya/go/context/`);
-export const mine = (slug: string) => call<MyItem[]>("GET", `/api/workspaces/${slug}/karya/go/mine/`);
+
+export function items(slug: string, query: ItemsQuery) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    const text = Array.isArray(value) ? value.join(",") : value == null ? "" : String(value);
+    if (text) params.set(key, text);
+  }
+  return call<ItemsPage>("GET", `/api/workspaces/${slug}/karya/go/items/?${params}`);
+}
+export const item = (slug: string, id: string) =>
+  call<ItemDetail>("GET", `/api/workspaces/${slug}/karya/go/items/${id}/`);
+
+// Edits go through upstream's own endpoints, so activity, notifications and the approver guard apply as in full Karya.
+const issueUrl = (slug: string, projectId: string, id: string) =>
+  `/api/workspaces/${slug}/projects/${projectId}/issues/${id}/`;
+export const update = (slug: string, projectId: string, id: string, patch: ItemPatch) =>
+  call<void>("PATCH", issueUrl(slug, projectId, id), patch);
+export const setModules = (slug: string, projectId: string, id: string, add: string[], remove: string[]) =>
+  call<void>("POST", `${issueUrl(slug, projectId, id)}modules/`, { modules: add, removed_modules: remove });
+export const comment = (slug: string, projectId: string, id: string, text: string) =>
+  call<void>("POST", `${issueUrl(slug, projectId, id)}comments/`, {
+    comment_html: text
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => `<p>${escapeHtml(line)}</p>`)
+      .join(""),
+  });
 
 export function draft(slug: string, projectId: string, input: Blob | string) {
   const form = new FormData();

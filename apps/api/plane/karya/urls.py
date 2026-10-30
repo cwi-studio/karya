@@ -4,7 +4,13 @@ from django.urls import path
 
 from .approvals_views import KaryaStateApproverEndpoint
 from .deletion_views import KaryaIssueDeleterEndpoint
-from .go_views import KaryaGoContextEndpoint, KaryaGoDraftEndpoint, KaryaGoMineEndpoint
+from .go_views import (
+    KaryaGoContextEndpoint,
+    KaryaGoDraftEndpoint,
+    KaryaGoItemEndpoint,
+    KaryaGoItemsEndpoint,
+    KaryaGoMineEndpoint,
+)
 from .views import KaryaUpgradeRequestEndpoint
 
 urlpatterns = [
@@ -26,4 +32,10 @@ urlpatterns = [
     path("workspaces/<str:slug>/karya/go/context/", KaryaGoContextEndpoint.as_view(), name="karya-go-context"),
     path("workspaces/<str:slug>/karya/go/draft/", KaryaGoDraftEndpoint.as_view(), name="karya-go-draft"),
     path("workspaces/<str:slug>/karya/go/mine/", KaryaGoMineEndpoint.as_view(), name="karya-go-mine"),
+    path("workspaces/<str:slug>/karya/go/items/", KaryaGoItemsEndpoint.as_view(), name="karya-go-items"),
+    path(
+        "workspaces/<str:slug>/karya/go/items/<uuid:issue_id>/",
+        KaryaGoItemEndpoint.as_view(),
+        name="karya-go-item",
+    ),
 ]

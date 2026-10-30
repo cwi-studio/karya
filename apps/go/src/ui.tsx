@@ -1,8 +1,8 @@
 // Karya Go — small shared pieces.
 // SPDX-License-Identifier: AGPL-3.0-only
 import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
-import type { Member, Priority } from "./api";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type { Member, Priority, StateGroup } from "./api";
 
 export const PRIORITIES: { value: Priority; label: string; color: string }[] = [
   { value: "urgent", label: "Urgent", color: "#e5484d" },
@@ -12,6 +12,54 @@ export const PRIORITIES: { value: Priority; label: string; color: string }[] = [
   { value: "none", label: "No priority", color: "#8b7d77" },
 ];
 export const priorityOf = (p: Priority) => PRIORITIES.find((x) => x.value === p) ?? PRIORITIES[4];
+
+export const GROUPS: { value: StateGroup; label: string; color: string }[] = [
+  { value: "backlog", label: "Backlog", color: "#a3a3a3" },
+  { value: "unstarted", label: "Todo", color: "#8b7d77" },
+  { value: "started", label: "In progress", color: "#f59e0b" },
+  { value: "completed", label: "Done", color: "#16a34a" },
+  { value: "cancelled", label: "Cancelled", color: "#dc2626" },
+];
+export const OPEN_GROUPS: StateGroup[] = ["backlog", "unstarted", "started"];
+export const groupOf = (g: StateGroup) => GROUPS.find((x) => x.value === g) ?? GROUPS[0];
+
+/** The same shapes full Karya uses: dashed ring, ring, half-filled, check, cross. */
+export function StateIcon({ group, color, size = 14 }: { group: StateGroup; color: string; size?: number }) {
+  const c = color || groupOf(group).color;
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden className="shrink-0">
+      {group === "backlog" && (
+        <circle cx="8" cy="8" r="6.5" fill="none" stroke={c} strokeWidth="1.6" strokeDasharray="2.6 2" />
+      )}
+      {group === "unstarted" && <circle cx="8" cy="8" r="6.5" fill="none" stroke={c} strokeWidth="1.6" />}
+      {group === "started" && (
+        <>
+          <circle cx="8" cy="8" r="6.5" fill="none" stroke={c} strokeWidth="1.6" />
+          <path d="M8 3.5A4.5 4.5 0 0 1 8 12.5Z" fill={c} />
+        </>
+      )}
+      {group === "completed" && (
+        <>
+          <circle cx="8" cy="8" r="7.2" fill={c} />
+          <path
+            d="M5 8.2l2 2 4-4.2"
+            fill="none"
+            stroke="#fff"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      )}
+      {group === "cancelled" && (
+        <>
+          <circle cx="8" cy="8" r="7.2" fill={c} />
+          <path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" />
+        </>
+      )}
+    </svg>
+  );
+}
 
 export function Mark({ size = 28 }: { size?: number }) {
   return (
@@ -159,3 +207,81 @@ export const storage = {
     }
   },
 };
+
+export function timeAgo(value: string) {
+  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  if (seconds < 86400 * 7) return `${Math.floor(seconds / 86400)} d ago`;
+  return new Date(value).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
+/** One message at a time, bottom of the screen, gone after a few seconds. */
+export function useToast() {
+  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const show = useCallback((text: string, error = false) => {
+    window.clearTimeout(timer.current);
+    setMessage({ text, error });
+    timer.current = window.setTimeout(() => setMessage(null), error ? 5000 : 2200);
+  }, []);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const element = message && (
+    <div className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-6" aria-live="polite">
+      <p
+        role={message.error ? "alert" : "status"}
+        className={`fade-in shadow-xl max-w-sm rounded-2xl px-4 py-2.5 text-[14px] font-medium ${
+          message.error ? "bg-[#d13a2f] text-white" : "bg-ink dark:text-ink text-white dark:bg-[#f6eee9]"
+        }`}
+      >
+        {message.text}
+      </p>
+    </div>
+  );
+  return { show, element };
+}
+
+const BLOCKS = new Set(["P", "UL", "OL", "LI", "BLOCKQUOTE", "PRE", "H1", "H2", "H3", "H4", "H5", "H6", "HR", "BR"]);
+const INLINE = new Set(["STRONG", "B", "EM", "I", "U", "S", "CODE", "SPAN", "A", "MARK", "SUB", "SUP"]);
+
+/** Descriptions and comments are rich text from full Karya. Keep the formatting tags, drop everything else
+ * (scripts, styles, event handlers); mentions become @name and embedded images a note to open full Karya. */
+export function safeHtml(html: string) {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+  const out = document.createElement("div");
+  const walk = (from: Node, to: Node) => {
+    from.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) return to.appendChild(document.createTextNode(node.textContent ?? ""));
+      if (!(node instanceof Element)) return;
+      const tag = node.tagName;
+      if (tag === "MENTION-COMPONENT") {
+        const span = document.createElement("span");
+        span.className = "mention";
+        span.textContent = `@${node.getAttribute("entity_name") === "user_mention" ? node.textContent || "someone" : "someone"}`;
+        return to.appendChild(span);
+      }
+      if (tag === "IMAGE-COMPONENT" || tag === "IMG") {
+        const note = document.createElement("p");
+        note.className = "image-note";
+        note.textContent = "🖼 Image: open in full Karya to see it";
+        return to.appendChild(note);
+      }
+      if (BLOCKS.has(tag) || INLINE.has(tag)) {
+        const copy = document.createElement(tag === "A" ? "a" : tag.toLowerCase());
+        if (tag === "A") {
+          const href = node.getAttribute("href") ?? "";
+          if (/^(https?:|mailto:|\/)/i.test(href)) copy.setAttribute("href", href);
+          copy.setAttribute("target", "_blank");
+          copy.setAttribute("rel", "noopener noreferrer");
+        }
+        walk(node, copy);
+        return to.appendChild(copy);
+      }
+      if (["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "TEMPLATE"].includes(tag)) return;
+      walk(node, to); // unknown wrapper (div, table, task list…): keep its text and allowed children
+    });
+  };
+  walk(doc.body, out);
+  return out.innerHTML;
+}

@@ -1,13 +1,13 @@
-// Karya Go — the shell: sign-in gate, workspace and project, the two tabs.
+// Karya Go — the shell: sign-in gate, workspace and project, the two tabs (new ticket, work).
 // SPDX-License-Identifier: AGPL-3.0-only
-import { ChevronDown, ListTodo, Mic, Search } from "lucide-react";
+import { ChevronDown, Layers, ListTodo, Mic, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "./api";
 import { takeShared } from "./attachments";
 import { Capture } from "./Capture";
 import { InstallBanner } from "./Install";
-import { MyWork } from "./MyWork";
 import { Mark, Row, Sheet, storage } from "./ui";
+import { Work } from "./Work";
 
 type Boot = { state: "loading" } | { state: "signed-out" } | { state: "error"; message: string } | { state: "ready" };
 
@@ -17,9 +17,10 @@ export function App() {
   const [slug, setSlug] = useState(storage.get("workspace"));
   const [ctx, setCtx] = useState<api.Context | null>(null);
   const [projectId, setProjectId] = useState("");
-  const [tab, setTab] = useState<"new" | "mine">(() =>
-    new URLSearchParams(location.search).get("tab") === "mine" ? "mine" : "new"
-  );
+  const [workProjectId, setWorkProjectId] = useState(""); // "" = every project I'm in
+  // ?tab=mine is the old "My work" link (installed home-screen shortcuts): open Work showing my items.
+  const [startTab] = useState(() => new URLSearchParams(location.search).get("tab"));
+  const [tab, setTab] = useState<"new" | "work">(startTab === "mine" || startTab === "work" ? "work" : "new");
   const [picking, setPicking] = useState(false);
   const [shared, setShared] = useState<{ files: File[]; text: string } | null>(null);
 
@@ -57,7 +58,10 @@ export function App() {
         const c = await api.context(slug);
         setCtx(c);
         const remembered = storage.get(`project:${slug}`);
-        setProjectId(c.projects.some((p) => p.id === remembered) ? remembered : (c.projects[0]?.id ?? ""));
+        const first = c.projects.some((p) => p.id === remembered) ? remembered : (c.projects[0]?.id ?? "");
+        setProjectId(first);
+        const work = storage.get(`work-project:${slug}`);
+        setWorkProjectId(work === "all" ? "" : c.projects.some((p) => p.id === work) ? work : first);
         setBoot({ state: "ready" });
       } catch (e) {
         fail(e);
@@ -66,6 +70,8 @@ export function App() {
   }, [slug, workspaces.length, fail]);
 
   const project = useMemo(() => ctx?.projects.find((p) => p.id === projectId) ?? null, [ctx, projectId]);
+  const workProject = useMemo(() => ctx?.projects.find((p) => p.id === workProjectId) ?? null, [ctx, workProjectId]);
+  const shown = tab === "work" ? workProject : project;
   const workspace = workspaces.find((w) => w.slug === slug);
 
   if (boot.state === "loading" || (boot.state === "ready" && !ctx))
@@ -90,9 +96,14 @@ export function App() {
       </Centered>
     );
 
-  const choose = (id: string, ws = slug) => {
-    storage.set(`project:${ws}`, id);
-    setProjectId(id);
+  const choose = (id: string) => {
+    if (tab === "work") {
+      storage.set(`work-project:${slug}`, id || "all");
+      setWorkProjectId(id);
+    } else {
+      storage.set(`project:${slug}`, id);
+      setProjectId(id);
+    }
     setPicking(false);
   };
 
@@ -108,7 +119,11 @@ export function App() {
             aria-label="Choose project"
           >
             <span className="truncate">
-              {project ? `${project.emoji ? project.emoji + " " : ""}${project.name}` : "Choose a project"}
+              {shown
+                ? `${shown.emoji ? shown.emoji + " " : ""}${shown.name}`
+                : tab === "work"
+                  ? "All my projects"
+                  : "Choose a project"}
             </span>
             <ChevronDown size={18} className="text-muted shrink-0" />
           </button>
@@ -141,19 +156,21 @@ export function App() {
               </p>
             </Centered>
           )
-        ) : (
-          <MyWork slug={slug} onSignedOut={fail} />
-        )}
+        ) : ctx ? (
+          <Work
+            key={`${slug}:${workProjectId}`}
+            slug={slug}
+            ctx={ctx}
+            project={workProject}
+            initialScope={startTab === "mine" ? "mine" : undefined}
+            onSignedOut={fail}
+          />
+        ) : null}
       </main>
 
       <nav className="safe-bottom border-line bg-bg/95 grid grid-cols-2 border-t px-6 pt-1.5 backdrop-blur">
         <TabButton active={tab === "new"} onClick={() => setTab("new")} icon={<Mic size={22} />} label="New ticket" />
-        <TabButton
-          active={tab === "mine"}
-          onClick={() => setTab("mine")}
-          icon={<ListTodo size={22} />}
-          label="My work"
-        />
+        <TabButton active={tab === "work"} onClick={() => setTab("work")} icon={<ListTodo size={22} />} label="Work" />
       </nav>
 
       {picking && ctx && (
@@ -161,7 +178,8 @@ export function App() {
           ctx={ctx}
           workspaces={workspaces}
           slug={slug}
-          projectId={projectId}
+          projectId={tab === "work" ? workProjectId : projectId}
+          allowAll={tab === "work"}
           onWorkspace={(s) => {
             setSlug(s);
             setPicking(false);
@@ -194,6 +212,7 @@ function ProjectPicker(props: {
   workspaces: api.Workspace[];
   slug: string;
   projectId: string;
+  allowAll: boolean;
   onWorkspace: (slug: string) => void;
   onProject: (id: string) => void;
   onClose: () => void;
@@ -204,7 +223,7 @@ function ProjectPicker(props: {
     (p) => !q || p.name.toLowerCase().includes(q) || p.identifier.toLowerCase().includes(q)
   );
   return (
-    <Sheet title="Where does it go?" onClose={props.onClose}>
+    <Sheet title={props.allowAll ? "Show work from" : "Where does it go?"} onClose={props.onClose}>
       {props.workspaces.length > 1 && (
         <div className="-mx-3 mb-2 flex gap-2 overflow-x-auto px-4 pb-1">
           {props.workspaces.map((w) => (
@@ -230,6 +249,19 @@ function ProjectPicker(props: {
             className="min-w-0 flex-1 bg-transparent outline-none"
           />
         </label>
+      )}
+      {props.allowAll && !q && (
+        <Row selected={!props.projectId} onClick={() => props.onProject("")}>
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2">
+            <Layers size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate">All my projects</span>
+            <span className="text-xs text-muted block">
+              Everything you can see in {props.ctx.projects.length} projects
+            </span>
+          </span>
+        </Row>
       )}
       {projects.map((p) => (
         <Row key={p.id} selected={p.id === props.projectId} onClick={() => props.onProject(p.id)}>

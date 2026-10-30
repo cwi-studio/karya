@@ -1,11 +1,12 @@
 // Karya Go — the draft, editable, one tap to create; and the "done" screen.
 // SPDX-License-Identifier: AGPL-3.0-only
-import { Boxes, CalendarDays, Check, ExternalLink, Flag, Plus, Search, Share2, UserRound } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Boxes, CalendarDays, Check, ExternalLink, Flag, Plus, Share2, UserRound } from "lucide-react";
+import { useState } from "react";
 import * as api from "./api";
 import { AttachmentStrip } from "./Attach";
 import type { Attachment } from "./attachments";
-import { Avatar, PRIORITIES, Row, Sheet, Spinner, dueChoices, formatDue, priorityOf } from "./ui";
+import { DateSheet, PeoplePicker, PrioritySheet } from "./pickers";
+import { Avatar, Row, Sheet, Spinner, formatDue, priorityOf } from "./ui";
 
 type Picker = "people" | "priority" | "due" | "module" | null;
 
@@ -161,60 +162,15 @@ export function Review(props: {
         />
       )}
       {picker === "priority" && (
-        <Sheet title="Priority" onClose={() => setPicker(null)}>
-          {PRIORITIES.map((p) => (
-            <Row
-              key={p.value}
-              selected={draft.priority === p.value}
-              onClick={() => {
-                set({ priority: p.value });
-                setPicker(null);
-              }}
-            >
-              <Flag size={18} style={{ color: p.color }} fill={p.value === "none" ? "none" : p.color} />
-              {p.label}
-            </Row>
-          ))}
-        </Sheet>
+        <PrioritySheet value={draft.priority} onPick={(p) => set({ priority: p })} onClose={() => setPicker(null)} />
       )}
       {picker === "due" && (
-        <Sheet title="Due date" onClose={() => setPicker(null)}>
-          {dueChoices().map((c) => (
-            <Row
-              key={c.label}
-              selected={draft.target_date === c.value}
-              onClick={() => {
-                set({ target_date: c.value });
-                setPicker(null);
-              }}
-            >
-              <span className="flex-1">{c.label}</span>
-              <span className="text-sm text-muted">{formatDue(c.value)}</span>
-            </Row>
-          ))}
-          <label className="flex min-h-12 items-center gap-3 rounded-xl px-3 py-2.5 text-[15px]">
-            <span className="flex-1">Pick a date</span>
-            <input
-              type="date"
-              value={draft.target_date ?? ""}
-              onChange={(e) => {
-                set({ target_date: e.target.value || null });
-                if (e.target.value) setPicker(null);
-              }}
-              className="rounded-lg bg-surface-2 px-2 py-1.5"
-            />
-          </label>
-          {draft.target_date && (
-            <Row
-              onClick={() => {
-                set({ target_date: null });
-                setPicker(null);
-              }}
-            >
-              <span className="text-muted">No due date</span>
-            </Row>
-          )}
-        </Sheet>
+        <DateSheet
+          title="Due date"
+          value={draft.target_date}
+          onPick={(v) => set({ target_date: v })}
+          onClose={() => setPicker(null)}
+        />
       )}
       {picker === "module" && (
         <Sheet title="Module" onClose={() => setPicker(null)}>
@@ -256,74 +212,6 @@ function Chip(props: { onClick: () => void; empty: boolean; icon: React.ReactNod
       {props.empty ? <Plus size={15} /> : props.icon}
       {props.children}
     </button>
-  );
-}
-
-function PeoplePicker(props: {
-  members: api.Member[];
-  meId: string;
-  selected: string[];
-  onChange: (ids: string[]) => void;
-  onClose: () => void;
-}) {
-  const [query, setQuery] = useState("");
-  const sorted = useMemo(() => {
-    const me = props.members.filter((m) => m.id === props.meId);
-    return [...me, ...props.members.filter((m) => m.id !== props.meId)];
-  }, [props.members, props.meId]);
-  const q = query.trim().toLowerCase();
-  const shown = sorted.filter(
-    (m) => !q || m.display_name.toLowerCase().includes(q) || m.full_name.toLowerCase().includes(q)
-  );
-  const toggle = (id: string) =>
-    props.onChange(props.selected.includes(id) ? props.selected.filter((x) => x !== id) : [...props.selected, id]);
-
-  return (
-    <Sheet
-      title="Who should do it?"
-      onClose={props.onClose}
-      footer={
-        <button onClick={props.onClose} className="bg-coral text-ink mb-1 w-full rounded-full py-3 font-semibold">
-          Done
-        </button>
-      }
-    >
-      {props.members.length > 6 && (
-        <label className="mx-1 mb-2 flex items-center gap-2 rounded-xl bg-surface-2 px-3 py-2.5">
-          <Search size={18} className="text-muted" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search people"
-            className="min-w-0 flex-1 bg-transparent outline-none"
-          />
-        </label>
-      )}
-      {shown.map((m) => {
-        const on = props.selected.includes(m.id);
-        return (
-          <Row key={m.id} selected={on} onClick={() => toggle(m.id)}>
-            <Avatar member={m} size={34} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate">
-                {m.display_name}
-                {m.id === props.meId && <span className="text-muted"> (me)</span>}
-              </span>
-              {m.full_name && m.full_name.toLowerCase() !== m.display_name.toLowerCase() && (
-                <span className="text-xs text-muted block truncate">{m.full_name}</span>
-              )}
-            </span>
-            <span
-              className={`flex size-6 items-center justify-center rounded-full border-2 ${
-                on ? "border-coral bg-coral text-ink" : "border-line"
-              }`}
-            >
-              {on && <Check size={14} strokeWidth={3} />}
-            </span>
-          </Row>
-        );
-      })}
-    </Sheet>
   );
 }
 
