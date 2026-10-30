@@ -92,6 +92,7 @@ export type ItemPatch = Partial<{
   label_ids: string[];
   start_date: string | null;
   target_date: string | null;
+  description_html: string;
 }>;
 export type Created = { id: string; key: string; url: string; projectId: string };
 

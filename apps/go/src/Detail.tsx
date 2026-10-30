@@ -10,6 +10,7 @@ import {
   FileText,
   Flag,
   Paperclip,
+  Pencil,
   Send,
   Share2,
   Tag,
@@ -18,6 +19,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
 import { useFilePicker } from "./Attach";
+import { DescriptionEditor } from "./DescriptionEditor";
 import { upload } from "./attachments";
 import { DateSheet, MultiSheet, PeoplePicker, PrioritySheet, StateSheet } from "./pickers";
 import { Avatar, Spinner, StateIcon, formatDue, priorityOf, safeHtml, timeAgo } from "./ui";
@@ -100,6 +102,7 @@ export function Detail(props: {
   const [title, setTitle] = useState(item.name);
   const [comment, setComment] = useState("");
   const [sending, setSending] = useState(false);
+  const [editing, setEditing] = useState(false); // the description editor
   const [uploads, setUploads] = useState<{ id: number; name: string; progress: number; error?: string }[]>([]);
 
   const refresh = useCallback(() => {
@@ -114,9 +117,11 @@ export function Detail(props: {
   // Back button / swipe-back closes the item instead of leaving the app.
   const close = useRef(props.onClose);
   close.current = props.onClose;
+  const editingNow = useRef(false); // its own back step belongs to the description editor
+  editingNow.current = editing;
   useEffect(() => {
     history.pushState({ goItem: item.id }, "");
-    const onPop = () => close.current();
+    const onPop = () => !editingNow.current && close.current();
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [item.id]);
@@ -147,6 +152,14 @@ export function Detail(props: {
     const name = title.trim();
     if (!name) return setTitle(item.name);
     if (name !== item.name) editor.patch(item, { name }, { name }, "Title saved");
+  };
+  const saveDescription = async (html: string) => {
+    const ok = await editor.patch(item, { description_html: html }, {}, "Description saved");
+    if (ok) {
+      setDetail((d) => d && { ...d, description_html: html });
+      refresh();
+    }
+    return ok;
   };
   const send = async () => {
     const text = comment.trim();
@@ -300,17 +313,32 @@ export function Detail(props: {
           </p>
         )}
 
-        <Section title="Description">
+        <Section
+          title="Description"
+          action={
+            detail && (
+              <button
+                onClick={() => setEditing(true)}
+                className="text-coral-deep dark:text-coral -my-2 -mr-2 flex items-center gap-1 rounded-full px-3 py-2 text-[13px] font-medium active:bg-surface-2"
+              >
+                <Pencil size={13} /> Edit
+              </button>
+            )
+          }
+        >
           {!detail ? (
             <div className="shimmer h-16 rounded-xl" />
-          ) : detail.description_html.replace(/<[^>]*>/g, "").trim() ? (
-            <div className="rich" dangerouslySetInnerHTML={{ __html: safeHtml(detail.description_html) }} />
+          ) : /<(image-component|img|mention-component|table|hr)\b/i.test(detail.description_html) ||
+            detail.description_html.replace(/<[^>]*>/g, "").trim() ? (
+            <div className="rich" dangerouslySetInnerHTML={{ __html: safeHtml(detail.description_html, members) }} />
           ) : (
-            <p className="text-muted text-[14px]">No description.</p>
+            <button
+              onClick={() => setEditing(true)}
+              className="border-line text-muted w-full rounded-xl border border-dashed px-3 py-3 text-left text-[14px] active:bg-surface-2"
+            >
+              No description yet. Tap to add one.
+            </button>
           )}
-          <a href={url} className="text-coral-deep dark:text-coral mt-2 inline-block text-[13px] font-medium">
-            Edit description in full Karya
-          </a>
         </Section>
 
         <Section
@@ -379,7 +407,7 @@ export function Detail(props: {
                       {c.edited ? " · edited" : ""}
                     </span>
                   </p>
-                  <div className="rich mt-0.5" dangerouslySetInnerHTML={{ __html: safeHtml(c.html) }} />
+                  <div className="rich mt-0.5" dangerouslySetInnerHTML={{ __html: safeHtml(c.html, members) }} />
                 </div>
               </li>
             ))}
@@ -405,6 +433,15 @@ export function Detail(props: {
         </button>
       </div>
 
+      {editing && detail && (
+        <DescriptionEditor
+          itemKey={item.key}
+          html={detail.description_html}
+          members={members}
+          onSave={saveDescription}
+          onClose={() => setEditing(false)}
+        />
+      )}
       {picker === "state" && (
         <StateSheet
           states={project.states}

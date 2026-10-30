@@ -117,6 +117,27 @@ button {
   font-size: 13px;
 }
 
+/* Description editor: locked chips stand for what Go keeps but can't edit (images, mentions, tables…). */
+.editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+}
+.editor .atom {
+  display: inline-block;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 0 0.4em;
+  font-size: 0.9em;
+  color: var(--muted);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.editor .atom-block {
+  display: block;
+  padding: 0.45em 0.7em;
+}
+
 .safe-top {
   padding-top: max(env(safe-area-inset-top), 12px);
 }

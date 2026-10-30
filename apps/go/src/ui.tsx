@@ -247,7 +247,7 @@ const INLINE = new Set(["STRONG", "B", "EM", "I", "U", "S", "CODE", "SPAN", "A",
 
 /** Descriptions and comments are rich text from full Karya. Keep the formatting tags, drop everything else
  * (scripts, styles, event handlers); mentions become @name and embedded images a note to open full Karya. */
-export function safeHtml(html: string) {
+export function safeHtml(html: string, members: Pick<Member, "id" | "display_name">[] = []) {
   const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
   const out = document.createElement("div");
   const walk = (from: Node, to: Node) => {
@@ -258,7 +258,10 @@ export function safeHtml(html: string) {
       if (tag === "MENTION-COMPONENT") {
         const span = document.createElement("span");
         span.className = "mention";
-        span.textContent = `@${node.getAttribute("entity_name") === "user_mention" ? node.textContent || "someone" : "someone"}`;
+        const who =
+          node.getAttribute("entity_name") === "user_mention" &&
+          (members.find((m) => m.id === node.getAttribute("entity_identifier"))?.display_name || node.textContent);
+        span.textContent = `@${who || "someone"}`;
         return to.appendChild(span);
       }
       if (tag === "IMAGE-COMPONENT" || tag === "IMG") {
