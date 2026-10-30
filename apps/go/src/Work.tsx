@@ -33,12 +33,15 @@ import {
 } from "./ui";
 
 type View = "list" | "board";
-type Prefs = Omit<api.ItemsQuery, "project" | "offset" | "limit" | "q"> & { view: View };
+// The list and the board keep their own status filter: the list opens on open items, the board on every column.
+type Prefs = Omit<api.ItemsQuery, "project" | "offset" | "limit" | "q"> & { view: View; boardGroups: api.StateGroup[] };
 
+const ALL_GROUPS = GROUPS.map((g) => g.value);
 const DEFAULTS: Prefs = {
   view: "list",
   scope: "all",
   groups: OPEN_GROUPS,
+  boardGroups: ALL_GROUPS,
   states: [],
   priorities: [],
   assignees: [],
@@ -59,6 +62,10 @@ const SORTS: { value: api.Sort; label: string }[] = [
   { value: "created", label: "Newest" },
 ];
 const PAGE = 200;
+const CLOSED_PAGE = 50; // done items pile up; the board loads the latest few and pages the rest
+
+// One request per part, so hundreds of done items can't push open ones off the first page of the board.
+type Part = { key: string; groups: api.StateGroup[]; limit: number };
 
 type Column = { key: string; name: string; group: api.StateGroup; color: string; count: number; items: api.Item[] };
 
@@ -83,10 +90,10 @@ export function Work(props: {
   const [prefs, setPrefs] = useState<Prefs>(() => loadPrefs(slug, props.initialScope));
   const [query, setQuery] = useState("");
   const [q, setQ] = useState(""); // debounced
-  const [page, setPage] = useState<api.ItemsPage | null>(null);
+  const [pages, setPages] = useState<Record<string, api.ItemsPage> | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [more, setMore] = useState(false);
+  const [more, setMore] = useState<string | null>(null);
   const [sheet, setSheet] = useState<"filters" | "sort" | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [moving, setMoving] = useState<api.Item | null>(null);
@@ -117,11 +124,24 @@ export function Work(props: {
     };
   }, [prefs, project]);
 
-  const baseQuery = useMemo<api.ItemsQuery>(
+  const board = prefs.view === "board";
+  const groups = board ? scoped.boardGroups : scoped.groups;
+  const defaultGroups = board ? ALL_GROUPS : OPEN_GROUPS;
+
+  const parts = useMemo<Part[]>(() => {
+    if (!board || scoped.states.length) return [{ key: "all", groups, limit: PAGE }];
+    const open = groups.filter((g) => OPEN_GROUPS.includes(g));
+    const closed = groups.filter((g) => !OPEN_GROUPS.includes(g));
+    return [
+      ...(open.length ? [{ key: "open", groups: open, limit: PAGE }] : []),
+      ...(closed.length ? [{ key: "closed", groups: closed, limit: CLOSED_PAGE }] : []),
+    ];
+  }, [board, groups, scoped.states.length]);
+
+  const baseQuery = useMemo<Omit<api.ItemsQuery, "groups">>(
     () => ({
       project: project?.id ?? "",
       scope: scoped.scope,
-      groups: scoped.groups,
       states: scoped.states,
       priorities: scoped.priorities,
       assignees: scoped.assignees,
@@ -129,7 +149,6 @@ export function Work(props: {
       modules: scoped.modules,
       sort: scoped.sort,
       q,
-      limit: PAGE,
     }),
     [project, scoped, q]
   );
@@ -138,33 +157,67 @@ export function Work(props: {
     const id = ++request.current;
     setLoading(true);
     setError("");
-    api
-      .items(slug, baseQuery)
-      .then((p) => id === request.current && setPage(p))
+    Promise.all(parts.map((p) => api.items(slug, { ...baseQuery, groups: p.groups, limit: p.limit })))
+      .then((got) => id === request.current && setPages(Object.fromEntries(parts.map((p, i) => [p.key, got[i]]))))
       .catch((e) => (e instanceof api.SignedOut ? props.onSignedOut(e) : id === request.current && setError(e.message)))
       .finally(() => id === request.current && setLoading(false));
-  }, [slug, baseQuery]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slug, baseQuery, parts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(load, [load]);
 
-  const loadMore = async () => {
-    if (!page?.next_offset) return;
-    setMore(true);
+  // Every part merged into one page; shown only once each part of the current view has loaded.
+  const page = useMemo<api.ItemsPage | null>(() => {
+    const got = parts.map((p) => pages?.[p.key]);
+    if (got.some((p) => !p)) return null;
+    const all = got as api.ItemsPage[];
+    return {
+      items: all.flatMap((p) => p.items),
+      total: all.reduce((n, p) => n + p.total, 0),
+      counts: Object.assign({}, ...all.map((p) => p.counts)),
+      next_offset: null,
+    };
+  }, [parts, pages]);
+
+  const loadMore = async (key: string) => {
+    const part = parts.find((p) => p.key === key);
+    const current = pages?.[key];
+    if (!part || current?.next_offset == null) return;
+    setMore(key);
     try {
-      const next = await api.items(slug, { ...baseQuery, offset: page.next_offset });
-      setPage(
-        (p) => p && { ...next, items: [...p.items, ...next.items.filter((i) => !p.items.some((x) => x.id === i.id))] }
-      );
+      const next = await api.items(slug, {
+        ...baseQuery,
+        groups: part.groups,
+        limit: part.limit,
+        offset: current.next_offset,
+      });
+      setPages((ps) => {
+        const p = ps?.[key];
+        if (!ps || !p) return ps;
+        const items = [...p.items, ...next.items.filter((i) => !p.items.some((x) => x.id === i.id))];
+        return { ...ps, [key]: { ...next, items } };
+      });
     } catch (e) {
       if (e instanceof api.SignedOut) return props.onSignedOut(e);
       toast.show(e instanceof Error ? e.message : "Couldn't load more.", true);
     } finally {
-      setMore(false);
+      setMore(null);
     }
   };
+  const moreFor = (key: string) =>
+    pages?.[key] && <More page={pages[key]} busy={more === key} onMore={() => loadMore(key)} />;
+  const partOf = (group: api.StateGroup) => (parts.find((p) => p.groups.includes(group)) ?? parts[0]).key;
 
   const replace = useCallback((item: api.Item) => {
-    setPage((p) => p && { ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, ...item } : x)) });
+    setPages(
+      (ps) =>
+        ps &&
+        Object.fromEntries(
+          Object.entries(ps).map(([k, p]) => [
+            k,
+            { ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, ...item } : x)) },
+          ])
+        )
+    );
   }, []);
   const editor = useItemEditor({ slug, ctx, onChange: replace, onSignedOut: props.onSignedOut, toast: toast.show });
 
@@ -179,7 +232,7 @@ export function Work(props: {
     if (!page) return [];
     if (project) {
       const shown = project.states.filter((s) =>
-        scoped.states.length ? scoped.states.includes(s.id) : scoped.groups.includes(s.group)
+        scoped.states.length ? scoped.states.includes(s.id) : groups.includes(s.group)
       );
       return shown.map((s) => ({
         key: s.id,
@@ -191,7 +244,7 @@ export function Work(props: {
       }));
     }
     const groupOfState = new Map(ctx.projects.flatMap((p) => p.states.map((s) => [s.id, s.group] as const)));
-    return GROUPS.filter((g) => scoped.groups.includes(g.value)).map((g) => ({
+    return GROUPS.filter((g) => groups.includes(g.value)).map((g) => ({
       key: g.value,
       name: g.label,
       group: g.value,
@@ -199,10 +252,10 @@ export function Work(props: {
       count: Object.entries(page.counts).reduce((n, [id, c]) => n + (groupOfState.get(id) === g.value ? c : 0), 0),
       items: page.items.filter((i) => i.state.group === g.value),
     }));
-  }, [page, project, scoped, ctx]);
+  }, [page, project, scoped, groups, ctx]);
 
   const filterCount =
-    (scoped.groups.join() !== OPEN_GROUPS.join() || scoped.states.length ? 1 : 0) +
+    (groups.join() !== defaultGroups.join() || scoped.states.length ? 1 : 0) +
     (scoped.priorities.length ? 1 : 0) +
     (scoped.assignees.length ? 1 : 0) +
     (scoped.labels.length ? 1 : 0) +
@@ -286,10 +339,10 @@ export function Work(props: {
           </p>
         )}
         {page && !error && page.total > 0 && prefs.view === "list" && (
-          <ListView columns={columns} card={card} footer={<More page={page} busy={more} onMore={loadMore} />} />
+          <ListView columns={columns} card={card} footer={moreFor(parts[0].key)} />
         )}
         {page && !error && page.total > 0 && prefs.view === "board" && (
-          <BoardView columns={columns} card={card} footer={<More page={page} busy={more} onMore={loadMore} />} />
+          <BoardView columns={columns} card={card} footer={(c) => moreFor(partOf(c.group))} />
         )}
       </div>
 
@@ -311,11 +364,12 @@ export function Work(props: {
       )}
       {sheet === "filters" && (
         <Filters
-          prefs={scoped}
+          prefs={{ ...scoped, groups }}
+          defaultGroups={defaultGroups}
           project={project}
           people={everyone}
           meId={ctx.me.id}
-          onChange={update}
+          onChange={({ groups: g, ...rest }) => update(g ? { ...rest, [board ? "boardGroups" : "groups"]: g } : rest)}
           onClose={() => setSheet(null)}
         />
       )}
@@ -389,7 +443,11 @@ function ListView(props: { columns: Column[]; card: (i: api.Item) => React.React
   );
 }
 
-function BoardView(props: { columns: Column[]; card: (i: api.Item) => React.ReactNode; footer: React.ReactNode }) {
+function BoardView(props: {
+  columns: Column[];
+  card: (i: api.Item) => React.ReactNode;
+  footer: (c: Column) => React.ReactNode;
+}) {
   return (
     <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-3 [scrollbar-width:none]">
       {props.columns.map((c) => (
@@ -407,7 +465,7 @@ function BoardView(props: { columns: Column[]; card: (i: api.Item) => React.Reac
               <li key={i.id}>{props.card(i)}</li>
             ))}
             {!c.items.length && <li className="text-muted px-2 py-8 text-center text-[13px]">Nothing here</li>}
-            {c.items.length < c.count && <li>{props.footer}</li>}
+            {c.items.length < c.count && <li>{props.footer(c)}</li>}
           </ul>
         </section>
       ))}
@@ -508,6 +566,7 @@ const names = (ids: string[], from: { id: string; name?: string; display_name?: 
 
 function Filters(props: {
   prefs: Prefs;
+  defaultGroups: api.StateGroup[];
   project: api.Project | null;
   people: api.Member[];
   meId: string;
@@ -515,7 +574,7 @@ function Filters(props: {
   onClose: () => void;
 }) {
   const [sub, setSub] = useState<"people" | "labels" | "modules" | null>(null);
-  const { prefs, project } = props;
+  const { prefs, project, defaultGroups } = props;
 
   if (sub === "people")
     return (
@@ -561,7 +620,7 @@ function Filters(props: {
           <button
             onClick={() =>
               props.onChange({
-                groups: OPEN_GROUPS,
+                groups: defaultGroups,
                 states: [],
                 priorities: [],
                 assignees: [],
@@ -593,7 +652,7 @@ function Filters(props: {
                       ? prefs.states
                       : project.states.filter((x) => prefs.groups.includes(x.group)).map((x) => x.id);
                     const next = toggle(current, s.id);
-                    props.onChange(next.length ? { states: next } : { states: [], groups: OPEN_GROUPS });
+                    props.onChange(next.length ? { states: next } : { states: [], groups: defaultGroups });
                   }}
                 >
                   <StateIcon group={s.group} color={s.color} /> {s.name}
@@ -606,7 +665,7 @@ function Filters(props: {
                 on={prefs.groups.includes(g.value)}
                 onClick={() => {
                   const next = toggle(prefs.groups, g.value);
-                  props.onChange({ groups: next.length ? next : OPEN_GROUPS });
+                  props.onChange({ groups: next.length ? next : defaultGroups });
                 }}
               >
                 <StateIcon group={g.value} color={g.color} /> {g.label}
@@ -622,7 +681,7 @@ function Filters(props: {
         </button>
         <span className="text-muted">·</span>
         <button
-          onClick={() => props.onChange({ states: [], groups: GROUPS.map((g) => g.value) })}
+          onClick={() => props.onChange({ states: [], groups: ALL_GROUPS })}
           className="text-coral-deep dark:text-coral text-[13px] font-medium"
         >
           Everything, incl. done
